@@ -57,6 +57,8 @@
     <PackageReference Include="NvAPIWrapper.Net" Version="0.8.1.101" />
     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="10.0.8" />
     <PackageReference Include="System.Management" Version="9.0.9" />
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.6.2" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
     <PackageReference Include="Vortice.DirectX" Version="3.6.2" />
     <PackageReference Include="Vortice.DXGI" Version="3.6.2" />
     <PackageReference Include="Vortice.Win32.Graphics.Dxgi" Version="2.3.0" />

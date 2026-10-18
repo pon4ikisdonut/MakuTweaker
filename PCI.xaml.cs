@@ -1,4 +1,4 @@
-﻿using MakuTweakerNew.Properties;
+using MakuTweakerNew.Properties;
 using MicaWPF.Core.Enums;
 using MicaWPF.Core.Services;
 using Microsoft.Win32;
@@ -40,6 +40,8 @@ namespace MakuTweakerNew
         private double _lastMultiScore = 0;
         private Task _startupBenchTask;
         private CancellationTokenSource _diskBenchCts;
+        private GpuBenchmarkResult? _cachedGpuBench = null;
+        private string _cachedGpuName = string.Empty;
         private List<DisplayInfo> _displays = new List<DisplayInfo>();
 
         public class DisplayInfo
@@ -1296,21 +1298,9 @@ namespace MakuTweakerNew
             rateRamScore.Text = $"{ramScore:F1} / 10";
             rateRamDetails.Text = ramDetails;
 
-            double gpuScore = 0;
-            string gpuDetails = "";
-            try
-            {
-                ulong totalVramBytes = (ulong)_gpus.Sum(g => (long)g.VRamBytes);
-                double vramGb = totalVramBytes / (1024.0 * 1024 * 1024);
-                gpuScore = Math.Clamp(vramGb * (10.0 / 16.0), 0, 10.0);
-
-                string gpuName = _gpus.OrderByDescending(g => g.VRamBytes).FirstOrDefault()?.Name ?? UnknownStr;
-                gpuDetails = $"{gpuName} / {summaryVramText.Text}";
-            }
-            catch { gpuScore = 0.0; }
-
-            rateGpuScore.Text = $"{gpuScore:F1} / 10";
-            rateGpuDetails.Text = gpuDetails;
+            rateGpuScore.Visibility = Visibility.Collapsed;
+            rateGpuRing.Visibility = Visibility.Visible;
+            rateGpuDetails.Text = "";
 
             rateStorageScore.Visibility = Visibility.Collapsed;
             rateStorageRing.Visibility = Visibility.Visible;
@@ -1438,12 +1428,79 @@ namespace MakuTweakerNew
                 return cpuScore;
             }
 
+            // запуск асинхронного теста видюхи
+            async Task<double> UpdateGpuAsync()
+            {
+                double gpuScore = 0;
+                string gpuDetails = "";
+                try
+                {
+                    // выцепляем имя выбранной видюхи
+                    string targetGpuName = "";
+                    int selectedIdx = 0;
+                    if (_gpus != null && _gpus.Count > 0)
+                    {
+                        int idx = (videoComboBox.SelectedIndex >= 0 && videoComboBox.SelectedIndex < _gpus.Count)
+                            ? videoComboBox.SelectedIndex
+                            : 0;
+                        selectedIdx = idx;
+                        targetGpuName = _gpus[idx].Name;
+                    }
+
+                    // берем память конкретной выбранной видеокарты вместо суммы всех карт
+                    ulong selectedVramBytes = (_gpus != null && _gpus.Count > selectedIdx)
+                        ? _gpus[selectedIdx].VRamBytes
+                        : 0;
+                    double vramGb = selectedVramBytes / (1024.0 * 1024 * 1024);
+
+                    // гоняем бенчмарк если еще не кэшировали
+                    if (_cachedGpuBench == null || _cachedGpuName != targetGpuName)
+                    {
+                        _cachedGpuBench = await Task.Run(() => GpuBenchmark.Run(targetGpuName, selectedVramBytes));
+                        _cachedGpuName = targetGpuName;
+                    }
+
+                    string gpuName = !string.IsNullOrEmpty(targetGpuName)
+                        ? targetGpuName
+                        : (_gpus?.OrderByDescending(g => g.VRamBytes).FirstOrDefault()?.Name ?? UnknownStr);
+
+                    if (_cachedGpuBench != null && _cachedGpuBench.Success && (_cachedGpuBench.GFlops > 0 || _cachedGpuBench.MemoryBandwidthGBps > 0))
+                    {
+                        // берем посчитанный бал за фма терафлопсы память и объем
+                        gpuScore = _cachedGpuBench.FinalScore;
+
+                        double tflops = _cachedGpuBench.GFlops / 1000.0;
+                        string perfStr = tflops >= 1.0 ? $"{tflops:F1} TFLOPS" : $"{Math.Round(_cachedGpuBench.GFlops)} GFLOPS";
+                        string memStr = $"{Math.Round(_cachedGpuBench.MemoryBandwidthGBps)} GB/s";
+                        gpuDetails = $"{gpuName} / {summaryVramText.Text} ({perfStr}, {memStr})";
+                    }
+                    else
+                    {
+                        // откат на чистый объем если директх не завелся
+                        gpuScore = _cachedGpuBench?.FinalScore ?? Math.Clamp(vramGb * (10.0 / 16.0), 0, 10.0);
+                        gpuDetails = $"{gpuName} / {summaryVramText.Text}";
+                    }
+                }
+                catch
+                {
+                    gpuScore = 0.0;
+                }
+
+                // обновляем гуишку
+                rateGpuScore.Text = $"{gpuScore:F1} / 10";
+                rateGpuDetails.Text = gpuDetails;
+                rateGpuRing.Visibility = Visibility.Collapsed;
+                rateGpuScore.Visibility = Visibility.Visible;
+                return gpuScore;
+            }
+
             var storageTask = UpdateStorageAsync();
             var cpuTask = UpdateCpuAsync();
-            await Task.WhenAll(storageTask, cpuTask);
+            var gpuTask = UpdateGpuAsync();
+            await Task.WhenAll(storageTask, cpuTask, gpuTask);
 
             rateTotalRing.Visibility = Visibility.Collapsed;
-            double totalScore = (cpuTask.Result + ramScore + gpuScore + storageTask.Result) / 4.0;
+            double totalScore = (cpuTask.Result + ramScore + gpuTask.Result + storageTask.Result) / 4.0;
             rateTotalText.Text = $"{totalScore:F1} / 10";
         }
 
